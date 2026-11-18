@@ -1,6 +1,6 @@
-Free recall is sculpted by naturalistic event structure
+# Free recall is sculpted by naturalistic event structure
 
-Overview
+## Overview
 
 This repository contains analysis code associated with the manuscript:
 
