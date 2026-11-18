@@ -1,0 +1,96 @@
+---
+title: "EventTemp_analysis"
+author: "Xuan Zhang"
+date: "2026-02-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read packages 
+
+```{r read packages}
+library(tidyverse)
+```
+
+```{r create subject list, echo=FALSE}
+# item length for each section
+item_length_H <- 18 # 18 target items in the H section
+item_length_P <- 13 # 13 target items in the P section
+
+# number of subjects
+subject_length <- 83 # 83 unique subjects in the raw dataset
+
+# subject ids
+subject_list <- c(
+  "ID01MA", "ID02MA", "ID07MA", "ID10MA", "ID17MA", "ID18MA", "ID25MA", 
+  "ID27MA", "ID31MA", "ID32MA", "ID37MA", "ID38MA", "ID44MA", "ID45MA", 
+  "ID46MA", "ID52MA", "ID61MA", "ID62MA", "ID64MA", "ID67MA", "ID69MA", 
+  "ID74MA", "ID80MA", "ID81MA", "ID82MA", "ID83MA", "ID88MA", "ID89MA", 
+  "ID90MA", "ID97MA", "ID107MA", "ID108MA", "ID114MA", "ID119MA", "ID120MA","ID03MA", "ID04MA", "ID08MA", "ID13MA", "ID14MA", "ID19MA", "ID20MA", "ID21MA", "ID28MA", "ID29MA", "ID34MA", "ID39MA", "ID40MA", "ID42MA", "ID47MA", "ID48MA", "ID50MA", "ID57MA", "ID58MA", "ID65MA", "ID68MA",  "ID70MA", "ID71MA", "ID72MA", "ID76MA", "ID79MA", "ID85MA", "ID87MA", "ID95MA", "ID98MA", "ID101MA", "ID104MA", "ID106MA", "ID109MA", "ID110MA","ID111MA", "ID115MA", "ID116MA", "ID36MA", "ID54MA", "ID77MA", "ID91MA", "ID11MA", "ID22MA","ID117MA", "ID75MA", "ID93MA", "ID53MA"
+)
+```
+
+```{r create encoding dataset}
+# Create an encoding data that specifies how many items should be recalled for each section of the tour
+# This is created for each participant
+# The encoding dataset will be used for subsequent temporal association analyses 
+
+# set seed
+set.seed(123)
+
+# create the encoding dataset
+encoding_data <- data.frame(
+  
+  # create rows - 83 subjects times 31 items per subject (H + P section)
+  subject_id = rep(subject_list, each = 31), 
+                            
+  # list the name of items                          
+  item_name = rep(c("item_1", "item_2", "item_3", "item_4", "item_5", "item_6", "item_7", "item_8", "item_9", 
+                    "item_10", "item_11", "item_12", "item_13", "item_14", "item_15", "item_16", 
+                    "item_17","item_18", "item_19", 
+                    "item_20", "item_21", "item_22", "item_23", "item_24", "item_25", "item_26", "item_27", 
+                    "item_28", "item_29", "item_30", "item_31"), 83), 
+
+  # list of item occurrence number: item 1 to 31 for a total of 83 participants
+  item_num = rep(c(1:18, 1:13), 83), 
+  trial_num = rep(c(1:31), 83),
+  
+  # create block variable to categorize hospital sections
+  block = rep(c(rep("H", each = 18), rep("P", each = 13)), 83), 
+  
+  # create event categorization for each item: which event is the item associated to
+  event = rep(c(
+    # H section
+    rep("a", each = 2), rep("b", each = 2), rep("c", each = 2), rep("d", each = 4), rep("e", each = 4), rep("f", each = 4),
+    # P section
+    rep("g", each = 4), rep("h", each = 2), rep("i", each = 2), rep("j", each = 2), rep("k", each = 3)), 83),
+  
+  # create distance variable: euclidean distance 
+  euc_distance = rep(c(
+    # H section
+    0, 3.27, 16.23, 17.19, 31.04, 42.64, 44.4, 54.78, 55.84, 62.51, 65.93, 70.52, 87.2, 89.3, 94.17, 99.16, 105.23, 109.85,
+    # P section
+    0, 0.5, 5.25, 5.99, 18.56, 32.31, 35.43, 39.58, 42.97, 44.38, 68.64, 70.02, 73.31
+  ), 83)
+    
+)
+
+encoding_data <- encoding_data %>%
+  group_by(subject_id, block) %>%
+  mutate(trial_num = row_number()) %>%  # Assigns a trial number per group
+  mutate(block_recode = case_when(block == "H" ~ 1,
+         block == "P" ~ 2))
+
+# View encoding data
+encoding_data
+```
+
+
+## Save the encoding dataset
+```{r}
+write.csv(encoding_data, "encoding_data.csv", row.names = FALSE)
+```
+

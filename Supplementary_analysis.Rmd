@@ -1,0 +1,331 @@
+---
+title: "Supplementary_Analysis"
+author: "Xuan Zhang"
+date: "2026-07-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Analysis Preparation
+
+---
+## Read packages
+
+```{r read packages}
+library(lme4)
+library(lmerTest)
+library(ggeffects)
+library(summarytools)
+library(ggrepel) 
+library(lmerTest)
+library(effectsize)
+library(ggdist)
+library(tidyverse)
+library(emmeans)
+library(e1071)
+library(summarytools)
+```
+
+## Source functions
+
+```{r source helper function}
+source("recall_helper_functions.R")
+```
+
+## Read Encoding & Recall Datasets
+
+```{r read data, echo=FALSE}
+# set working directory
+path = dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(path)
+
+# read encoding and free recall data
+baytour_recall_data_raw <- read_csv("event_baytour_recall.csv")
+encoding_data <- read_csv("encoding_data.csv")
+```
+
+## Data transformation: recall data
+
+```{r recall data transformation}
+# transform data into long format
+baytour_recall_data <- baytour_recall_data_raw %>%
+  pivot_longer(cols = c(6:23), values_to = "item_num") %>% 
+  select(`Subject ID`, `Tour Section (H/P)`, "item_num") %>%
+  mutate(subject_id = `Subject ID`, block = `Tour Section (H/P)`) %>%  
+  select(subject_id, block, item_num) %>%
+  group_by(subject_id, block) %>%
+  mutate(recall_position = row_number()) %>% # original order of items 
+  filter(!(block == "P" & recall_position > 13)) %>% # block "P" has 13 recall space
+  mutate(block_recode = 
+           case_when(block == "H" ~ 1,
+                     block == "P" ~ 2)) # recode block to numeric value
+
+# View(baytour_recall_data)
+```
+
+```{r checking duplicates}
+# Check for duplicates within subject and block
+duplicates <- baytour_recall_data %>%
+  filter(!is.na(item_num)) %>%  # remove NA item_nums first
+  group_by(subject_id, block) %>%
+  mutate(duplicate = duplicated(item_num) | duplicated(item_num, fromLast = TRUE)) %>%
+  filter(duplicate) %>%
+  arrange(subject_id, block, item_num)
+
+print(duplicates)
+```
+
+## Exclude participants with fewer than 5 order-tagged recall items (4 transitions)
+
+```{r trial exclusion}
+# list out the ids 
+baytour_exclude_trial <- list()
+counter <- 1
+
+# count trials within each block for each participant
+for (each_subject in unique(baytour_recall_data$subject_id)) {
+  # compute the block number
+  max_block = unique(baytour_recall_data$block[baytour_recall_data$subject_id == each_subject])
+  # count the item_num in each block within each participant
+  for(each_block in max_block) {
+    n_items <- sum(!is.na(baytour_recall_data$item_num[baytour_recall_data$subject_id == each_subject & baytour_recall_data$block == each_block]))
+    if (n_items < 5) {
+      baytour_exclude_trial[[counter]] <- list(subject = each_subject, block = each_block)
+      counter <- counter + 1
+    }
+  # print out how many recall items each subject has
+  # print(paste("Subject:", each_subject, "has", n_items, "items"))
+  }
+}
+
+# Convert each list element into a data frame row and then bind all rows together
+exclusion_df <- do.call(rbind, lapply(baytour_exclude_trial, function(x) {
+  data.frame(subject_id = x$subject, block = x$block, stringsAsFactors = FALSE)
+}))
+exclusion_df
+
+# exclude participants
+baytour_recall_data_clean <- anti_join(baytour_recall_data, exclusion_df, by = c("subject_id", "block"))
+```
+
+## Combine clean recall and encoding
+
+```{r combine datasets}
+complete_baytour_data <- recall_binding(encoding_data, baytour_recall_data_clean)
+complete_baytour_data  <- complete_baytour_data %>%
+  mutate(block_recode = case_when(
+    block == "H" ~ 1, 
+    block == "P" ~ 2
+  ))
+```
+
+## Event Label: Create event transition label for recall data
+
+```{r add event label}
+zone_based_data <- zone_based_category(complete_recall_transition)
+```
+
+# Overall distance check
+
+## Encoding
+```{r create event types for encoding data}
+event_encoding_data <- zone_based_encoding(encoding_data)
+```
+
+```{r select non-repetitive trials}
+items_data <- event_encoding_data %>%
+  distinct(block, item_num, event_transition, abs_lag_distance)
+```
+
+```{r summarise distance}
+items_data %>%
+  group_by(event_transition) %>%
+  summarise(
+    n = n(),
+    mean_distance = mean(abs_lag_distance),
+    sd_distance = sd(abs_lag_distance),
+    median_distance = median(abs_lag_distance)
+  )
+```
+
+```{r welch t test}
+t.test(
+  abs_lag_distance ~ event_transition,
+  data = items_data
+)
+```
+
+## Recall 
+```{r distance calculation for lags between event categories}
+# check assumptions
+dfSummary(zone_based_data$abs_lag_distance)
+skewness(zone_based_data$abs_lag_distance, na.rm= TRUE)
+
+# create absolute temporal lag column
+zone_distance_constrained <- zone_based_data %>% 
+  mutate(abs_lags = abs(actual_lags)) %>%
+  filter(abs_lags <= 3) %>% # apply temporal constraints
+  group_by(subject_id) %>%
+  ungroup
+```
+
+```{r mixed linear regression}
+# mixed linear regression to check distance between recalled item pairs
+lag_distance_model <- lmer(abs_lag_distance ~ event_transition * factor(abs_lags) + (1 | subject_id), data = zone_distance_constrained)
+
+summary(lag_distance_model)
+
+emm <- emmeans(
+  lag_distance_model,
+  ~ event_transition | abs_lags
+)
+emm
+pairs(emm)
+plot(emm)
+```
+*Note* Recalled items from within the same event were spatially closer than items recalled across events. But this was not the case for the physical distance between item pairs. 
+
+```{r visualization}
+# Supplementary Figure 1b
+Supp_Fig1_b <- ggplot(
+  predicted_distance,
+  aes(
+    x = x,
+    y = predicted,
+    color = group,
+    group = group
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(ymin = conf.low, ymax = conf.high),
+    width = 0.08
+  ) +
+  scale_x_continuous(breaks = 1:3) +
+  scale_color_manual(
+    values = c("#FFC458", "#78C8F0")
+  ) +
+  labs(
+    x = "Absolute Temporal Lag",
+    y = "Distance Between Recalled Item Pairs (m)",
+    color = "Event Transition"
+  ) +
+  theme_classic(base_size = 16) 
+
+Supp_Fig1_b 
+
+ggsave("Supp_Fig1_b.png", Supp_Fig1_b, width = 8, height = 6, units = "in", dpi = 600)
+
+```
+
+# Additional Analysis
+
+## Distance check for temporal factor
+```{r}
+# collapse over ptile and lag column
+common_deno_combine_ptile <- common_deno_recall_ptile  %>%
+  mutate(
+    abs_actual_lag = coalesce(
+      abs_actual_lags_within,
+      abs_actual_lags_between
+    ),
+    ptile_rank = coalesce(
+      ptile_rank_within,
+      ptile_rank_between
+    )
+  ) %>%
+  filter(abs_actual_lag < 4) # apply a temporal restriction to match temporal lag distance between within vs. between
+
+# center distance mean
+common_deno_combine_ptile <- common_deno_combine_ptile %>%
+  mutate(
+    abs_lag_distance_c =
+      abs_lag_distance - mean(abs_lag_distance, na.rm = TRUE)
+  )
+
+
+# mixed linear model
+distance_lmer_model <- lmer(ptile_rank ~ abs_lag_distance_c + event_transition + (1 | subject_id), data = common_deno_combine_ptile)
+summary(distance_lmer_model)
+
+distance_interaction_model <- lmer(ptile_rank ~ abs_lag_distance_c * event_transition + (1 | subject_id), data = common_deno_combine_ptile
+)
+summary(distance_interaction_model)
+
+
+# BIC-based model comparison
+distance_lmer_model %>%
+  BIC
+distance_interaction_model  %>%
+  BIC
+log_bayes_factor = abs(BIC(distance_lmer_model) - BIC(distance_interaction_model ))
+log_bayes_factor %>%
+  print
+
+library(emmeans)
+
+emtrends(
+  distance_interaction_model,
+  pairwise ~ event_transition,
+  var = "abs_lag_distance_c"
+)
+
+emmeans(
+  distance_interaction_model,
+  pairwise ~ event_transition,
+  at = list(abs_lag_distance_c = c(-3, 0, 3))
+)
+```
+
+```{r}
+
+# Select representative centered lag distances
+lag_values <- seq(
+  min(common_deno_combine_ptile$abs_lag_distance_c, na.rm = TRUE),
+  max(common_deno_combine_ptile$abs_lag_distance_c, na.rm = TRUE),
+  length.out = 20
+)
+
+# Estimated marginal means
+emm_lag <- emmeans(
+  distance_interaction_model,   # replace with your model-object name
+  ~ event_transition | abs_lag_distance_c,
+  at = list(abs_lag_distance_c = lag_values)
+)
+
+emm_df <- as.data.frame(emm_lag)
+
+
+# Plot
+ggplot(
+  emm_df,
+  aes(
+    x = abs_lag_distance_c,
+    y = emmean,
+    colour = event_transition,
+    fill = event_transition
+  )
+) +
+  geom_ribbon(
+    aes(ymin = lower.CL, ymax = upper.CL),
+    alpha = 0.15,
+    colour = NA
+  ) +
+  geom_line(linewidth = 1.1) +
+  labs(
+    x = "Absolute euclidean distance between items (mean-centred)",
+    y = "Estimated percentile rank",
+    colour = "Event transition",
+    fill = "Event transition"
+  ) +
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+
+```

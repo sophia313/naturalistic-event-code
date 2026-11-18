@@ -1,0 +1,695 @@
+---
+title: "EventTemp_recall_analysis"
+author: "Xuan Zhang"
+date: "2026-02-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Analysis Preparation
+
+---
+## Read packages
+
+```{r read packages}
+library(lme4)
+library(lmerTest)
+library(ggeffects)
+library(summarytools)
+library(ggrepel) 
+library(lmerTest)
+library(effectsize)
+library(ggdist)
+library(tidyverse)
+```
+
+
+## Source functions
+
+```{r source helper function}
+source("recall_helper_functions.R")
+```
+
+
+## Read Encoding & Recall Datasets
+
+```{r read data, echo=FALSE}
+# set working directory
+path = dirname(rstudioapi::getActiveDocumentContext()$path)
+setwd(path)
+
+# read encoding and free recall data
+baytour_recall_data_raw <- read_csv("event_baytour_recall.csv")
+encoding_data <- read_csv("encoding_data.csv")
+```
+
+## Data transformation: recall data
+
+```{r recall data transformation}
+# transform data into long format
+baytour_recall_data <- baytour_recall_data_raw %>%
+  pivot_longer(cols = c(6:23), values_to = "item_num") %>% 
+  select(`Subject ID`, `Tour Section (H/P)`, "item_num") %>%
+  mutate(subject_id = `Subject ID`, block = `Tour Section (H/P)`) %>%  
+  select(subject_id, block, item_num) %>%
+  group_by(subject_id, block) %>%
+  mutate(recall_position = row_number()) %>% # original order of items 
+  filter(!(block == "P" & recall_position > 13)) %>% # block "P" has 13 recall space
+  mutate(block_recode = 
+           case_when(block == "H" ~ 1,
+                     block == "P" ~ 2)) # recode block to numeric value
+
+View(baytour_recall_data)
+```
+
+```{r checking duplicates}
+# Check for duplicates within subject and block
+duplicates <- baytour_recall_data %>%
+  filter(!is.na(item_num)) %>%  # remove NA item_nums first
+  group_by(subject_id, block) %>%
+  mutate(duplicate = duplicated(item_num) | duplicated(item_num, fromLast = TRUE)) %>%
+  filter(duplicate) %>%
+  arrange(subject_id, block, item_num)
+
+print(duplicates)
+```
+
+
+## Exclude participants with fewer than 5 order-tagged recall items (4 transitions)
+
+```{r trial exclusion}
+# list out the ids 
+baytour_exclude_trial <- list()
+counter <- 1
+
+# count trials within each block for each participant
+for (each_subject in unique(baytour_recall_data$subject_id)) {
+  # compute the block number
+  max_block = unique(baytour_recall_data$block[baytour_recall_data$subject_id == each_subject])
+  # count the item_num in each block within each participant
+  for(each_block in max_block) {
+    n_items <- sum(!is.na(baytour_recall_data$item_num[baytour_recall_data$subject_id == each_subject & baytour_recall_data$block == each_block]))
+    if (n_items < 5) {
+      baytour_exclude_trial[[counter]] <- list(subject = each_subject, block = each_block)
+      counter <- counter + 1
+    }
+  # print out how many recall items each subject has
+  # print(paste("Subject:", each_subject, "has", n_items, "items"))
+  }
+}
+
+# Convert each list element into a data frame row and then bind all rows together
+exclusion_df <- do.call(rbind, lapply(baytour_exclude_trial, function(x) {
+  data.frame(subject_id = x$subject, block = x$block, stringsAsFactors = FALSE)
+}))
+exclusion_df
+
+# exclude participants
+baytour_recall_data_clean <- anti_join(baytour_recall_data, exclusion_df, by = c("subject_id", "block"))
+```
+
+## Combine clean recall and encoding
+
+```{r combine datasets}
+complete_baytour_data <- recall_binding(encoding_data, baytour_recall_data_clean)
+complete_baytour_data  <- complete_baytour_data %>%
+  mutate(block_recode = case_when(
+    block == "H" ~ 1, 
+    block == "P" ~ 2
+  ))
+```
+
+## Save transformed dataset (optional)
+
+```{r}
+# write complete_baytour_data (with event categories)
+write.csv(complete_baytour_data, "complete_baytour_data.csv", row.names = FALSE)
+```
+
+
+# Analysis 
+
+## Calculates transition & counts
+
+```{r}
+complete_recall_transition <- calculate_transitions(encoding_data, complete_baytour_data)
+complete_recall_transition
+```
+
+***Note.*** "actual_counts" and "possible_counts" are calculated based on "actual_lags" and "all_possible_lags". "lags" here means transitions from the current item to the next item. 
+
+## Compute overall lag-CRP
+
+```{r compute lag-CRP}
+# calculate lag-CRP based on all possible transitions of a recall trial
+complete_CRP <- CRP_calculation(complete_recall_transition)
+complete_CRP
+```
+
+***Note.*** Since most participants only recalled a few items, their actual counts of item transition is 0 for the ones un-recalled. Thus, there are a lot of 0 values in CRP column.
+
+## Event Label: Create event transition label
+
+```{r add event label}
+zone_based_data <- zone_based_category(complete_recall_transition)
+```
+
+## Lag-CRP
+
+### Same denominator approach: Create within VS. between datasets and calculate lag-CRP for each
+
+```{r create separate event datasets & calculate lag-CRP}
+# calculate lag-CRP using a common-denominator approach for each event type
+common_deno_result <- common_deno_CRP(zone_based_data)
+# combine lag-CRP results from within-event & between-event trials
+common_event_CRP_data <- bind_rows(common_deno_result$within, common_deno_result$between)
+```
+
+```{r calculate mean lag-CRP scores for within- vs. between-event lags}
+# calculate mean lag-CRP scores for each participant, grouped by lags and event transition
+lag_CRP_mean_common <- common_event_CRP_data %>%
+  group_by(subject_id, lags, event_transition) %>%
+  summarise(mean_CRP = mean(CRP, na.rm = TRUE),
+                   .groups = "drop") 
+lag_CRP_mean_common
+```
+### Creating positive and negative subsets - Lag-CRP
+```{r creating positive and negative subsets}
+# exclude participants
+dropped_subject <- c("ID22MA", "ID27MA", "ID64MA") # three participants were excluded from analyses because they did not produce both type of transitions within this lag range (e.g., participants who made only within- or between-event recalls)
+
+# filter datasets to contain either 1) postive lags from 0 to 3, OR 2) negative lags from 0 to -3
+
+# positive chunk
+lag_CRP_positive_common <- lag_CRP_mean_common %>%
+  filter(lags < 4 & lags > 0) %>% # that maximum lag to include that havs both within- & between-event data
+  filter(!(subject_id %in% dropped_subject))
+
+# negative chunk
+lag_CRP_negative_common <-  lag_CRP_mean_common %>%
+  filter(lags < 0 & lags > -4) %>%
+  filter(!(subject_id %in% dropped_subject))
+
+```
+
+### Paired-samples t test
+```{r positive lags}
+# paired samples t test formula
+positive_paired_ttest <- lapply(split(lag_CRP_positive_common , lag_CRP_positive_common$lags), run_paired_ttest)
+positive_paired_ttest 
+
+# Combine the list into a single data frame
+modelSum_pos_pairt <- bind_rows(positive_paired_ttest)
+
+# 3. Apply the bonferroni correction
+modelSum_pos_pairt$p_bonferroni <- p.adjust(modelSum_pos_pairt$p_raw, method = "bonferroni")
+
+# 4. View your corrected results
+print(modelSum_pos_pairt)
+```
+
+```{r}
+# paired samples t test formula
+negative_paired_ttest <- lapply(split(lag_CRP_negative_common, lag_CRP_negative_common$lags), run_paired_ttest)
+
+# Combine the list into a single data frame
+modelSum_neg_pairt <- bind_rows(negative_paired_ttest)
+
+# 3. Apply the bonferroni correction
+modelSum_neg_pairt$p_bonferroni <- p.adjust(modelSum_neg_pairt$p_raw, method = "bonferroni")
+
+# 4. View your corrected results
+print(modelSum_neg_pairt)
+```
+
+
+
+### Lag-CRP Curve
+
+```{r lag-CRP curve, include = TRUE, echo=FALSE}
+# calculate mean & se lag-CRP for each lag, for two event types, among participants' CRP averages
+lagCRP_plotting_common <- lag_CRP_mean_common %>%
+  group_by(lags, event_transition) %>%
+  summarise(avg_CRP = mean(mean_CRP, na.rm = TRUE), 
+            CRP_sd = sd(mean_CRP, na.rm = TRUE),
+            CRP_n = n(),
+            .groups = "drop") %>%
+  mutate(CRP_se = CRP_sd/sqrt(CRP_n)) %>%
+  bind_rows(data.frame(lags=0, avg_CRP = NA, CRP_se = NA))
+
+lag_filtered <- lagCRP_plotting_common %>%
+  filter(lags >= -5 & lags <= 5) %>%
+  filter(!is.na(event_transition))
+
+# create visualization
+Fig3_a <- lag_filtered %>%
+  ggplot(aes(x=lags, y = avg_CRP, color = event_transition, fill = event_transition)) +
+    
+    ## left side: negative
+    geom_ribbon(data = subset(lagCRP_plotting_common, lags < 0 & lags >= -5),
+              aes(ymin = avg_CRP - CRP_se,
+                  ymax = avg_CRP + CRP_se,
+                  group = event_transition),
+              alpha = .25, colour = NA) +
+    geom_line (data = subset(lagCRP_plotting_common, lags < 0 & lags >= -5),
+             linewidth = 1) +
+    
+    ## right side: positive
+    geom_ribbon(data = subset(lagCRP_plotting_common, lags > 0 & lags <= 5), 
+              aes(ymin = avg_CRP - CRP_se,
+                  ymax = avg_CRP + CRP_se,
+                  group = event_transition),
+              alpha = .25, colour = NA) +
+    geom_line (data = subset(lagCRP_plotting_common, lags > 0 & lags <= 5),
+             linewidth = 1) +
+    geom_errorbar(aes(ymin = avg_CRP - CRP_se, ymax = avg_CRP + CRP_se),
+                 width = .1, position = position_dodge(0.05)) +
+    
+    ## adding points with bootstrapped interval
+    stat_summary(fun.data=mean_cl_boot, geom="pointrange", size=.6) +
+    
+  # Unified manual color/fill
+    scale_color_manual(
+    values = c("between" = "#436B7D", "within" = "#D85757"),
+    labels = c("Between", "Within")
+    ) +
+    scale_fill_manual(
+    values = c("between" = "#436B7D", "within" = "#D85757"),
+    guide   = "none") +      
+    guides(colour = guide_legend(title = NULL)) +  # only one legend
+    
+  # add significance annotations
+    annotate(
+      "text",
+      x = c(-1, 1, 2, 3),
+      y = c(0.145, 0.335, 0.185, 0.095),
+      label = c("***", "***", "***", "***"),
+      size = 5
+    ) +
+  
+    ## Axis and theme improvements
+    theme_classic(base_size = 16) +
+    theme(
+    legend.position = "top",
+    legend.text = element_text(size = 14),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    plot.title = element_text(hjust = 0.5, size = 16),
+    panel.grid = element_blank(),
+  ) +
+    labs(x = "Lag", y = "Conditional Response Probability",
+       color = "Event transition type") +
+    scale_x_continuous(breaks = -5:5)
+
+Fig3_a
+
+# Save as a 6‑inch‑by‑6‑inch square, high‑resolution
+ggsave("Fig3_a.png", Fig3_a, width = 8, height = 6, units = "in", dpi = 600)
+```
+## Temporal Cluster
+
+### Temporal Cluster Calculation - Common-denominator Approach
+
+```{r temporal clusters, include = TRUE, echo=FALSE}
+# calculate percentile rank for each recall trial
+common_deno_recall_ptile <- zone_based_data %>%
+  rowwise() %>%
+  mutate(
+    abs_possible_lags       = list(abs(as.numeric(unlist(possible_lags)))), #includes all possible lags as the denominator
+    abs_actual_lags_within  = if_else(event_transition == "within",
+                                      abs(actual_lags), NA_real_),
+    abs_actual_lags_between = if_else(event_transition == "between",
+                                      abs(actual_lags), NA_real_),
+    # list column that holds the two percentile ranks
+    ptile = list(
+      common_temp_percentile_rank(
+        abs_actual_lags_within,
+        abs_actual_lags_between,
+        abs_possible_lags
+      )
+    )
+  ) %>%                                   # ── everything above is still row-wise
+  hoist(ptile,                            # ── pull the two elements out
+        ptile_rank_within  = "ptile_rank_within",
+        ptile_rank_between = "ptile_rank_between") %>%
+  ungroup()
+```
+
+```{r proportion check}
+# check whether it's proportionally balanced for between-event items vs. within-event items
+sum(!is.na(common_deno_recall_ptile$ptile_rank_within))
+sum(!is.na(common_deno_recall_ptile$ptile_rank_between))
+```
+
+```{r within-event temporal factor summary}
+# create a within-event ptile sheet
+within_deno_recall_ptile <- common_deno_recall_ptile %>%
+  filter(event_transition == "within") %>%
+  filter(!is.na(ptile_rank_within)) %>%
+  filter(abs_actual_lags_within <= 3) # control for temporal distance - match for maximum within-event items
+
+# group by subject and block and calculate temp factor
+tempscore_subject_within <- within_deno_recall_ptile %>%
+  dplyr::group_by(subject_id, block) %>%
+  dplyr::summarise(temporal_factor = sum(ptile_rank_within) / n(),
+                   .groups = "drop") 
+
+# calculate the mean temporal factor scores for each participant across blocks
+tempscore_subject_within_mean <- tempscore_subject_within %>%
+  group_by(subject_id) %>%
+  summarize(mean_tempfactor = mean(temporal_factor),
+            .groups = "drop") 
+
+# calculate the overall mean temporal factor scores for within-event transitions
+tempscore_within_mean <- mean(tempscore_subject_within_mean$mean_tempfactor)
+tempscore_within_sd <- sd(tempscore_subject_within_mean$mean_tempfactor)
+```
+
+```{r between-event temporal factor summary}
+# create a between-event ptile sheet
+between_deno_recall_ptile <- common_deno_recall_ptile %>%
+  filter(event_transition == "between") %>%
+  filter(!is.na(ptile_rank_between)) %>%
+  filter(abs_actual_lags_between <= 3) # control for temporal distance - match for maximum within-event items
+
+# group by subject and block and calculate temp factor
+tempscore_subject_between <- between_deno_recall_ptile %>% 
+  dplyr::group_by(subject_id, block) %>%
+  dplyr::summarise(temporal_factor = sum(ptile_rank_between) / n(),
+                   .groups = "drop")
+
+# calculate the mean temporal factor scores for each participant across blocks
+tempscore_subject_between_mean <- tempscore_subject_between %>%
+  group_by(subject_id) %>%
+  summarize(mean_tempfactor = mean(temporal_factor),
+            .groups = "drop") 
+
+# calculate the overall mean temporal factor scores for within-event transitions
+tempscore_between_mean <- mean(tempscore_subject_between_mean$mean_tempfactor)
+tempscore_between_sd <- sd(tempscore_subject_between_mean $mean_tempfactor)
+```
+
+```{r check proportion after restricting temporal distance}
+# check whether it's proportionally balanced for between-event items vs. within-event items
+sum(!is.na(within_deno_recall_ptile$ptile_rank_within))
+sum(!is.na(between_deno_recall_ptile$ptile_rank_between))
+
+# check the proportions for lag 1, 2, and 3
+within_deno_recall_ptile %>%
+  filter(!is.na(ptile_rank_within)) %>%
+  count(abs_actual_lags_within)
+between_deno_recall_ptile %>%
+  filter(!is.na(ptile_rank_between)) %>%
+  count(abs_actual_lags_between)
+```
+
+```{r temporal factor output}
+# print outputs - within-events
+cat("Average within-event temporal cluster score:", tempscore_within_mean, "\n",
+    "SD for within-event temporal factor score:", tempscore_within_sd, "\n")
+
+# print outputs - between events
+cat("Average between-event temporal cluster score:", tempscore_between_mean, "\n",
+    "SD for between-event temporal factor score:", tempscore_between_sd, "\n")
+```
+
+### Combine both within- and between-event datasets for analysis
+
+```{r combine between & within event temporal scores}
+# combine two datasheets, organized by block and subject
+tempscore_subject_between_mutate <- tempscore_subject_between %>%
+  mutate(event_transition = "between")
+tempscore_subject_within_mutate <- tempscore_subject_within %>%
+  mutate(event_transition = "within")
+tempscore_subject_combined <- bind_rows(tempscore_subject_between_mutate, tempscore_subject_within_mutate)
+
+# combined over subjects
+tempscore_combined <- tempscore_subject_combined %>%
+  group_by(subject_id, event_transition) %>%
+  summarize(mean_temp = mean(temporal_factor),
+            .groups = "drop")
+```
+
+```{r participant exclusion based on one-type of event transition}
+# Check which participants have both 'within' and 'between'
+participants_check <- tempscore_combined %>%
+  group_by(subject_id) %>%
+  summarize(n_conditions = n_distinct(event_transition)) %>%
+  filter(n_conditions < 2)
+participants_check 
+
+# exclude subjects with only one type of event transition (either within- or between-)
+tempscore_combined <- tempscore_combined %>%
+   filter(!subject_id %in% participants_check$subject_id)
+```
+
+
+### T-test Analysis
+
+```{r paired sample t test: temporal cluster scores}
+# Pivot the data to wide format
+tempscore_wide <- tempscore_combined %>%
+  pivot_wider(names_from = event_transition, values_from = mean_temp)
+
+# First check whether the temporal factor for both groups are significantly higher than the null
+# One sample t test with two tails for both event types
+t.test(tempscore_wide$within, mu = 0.5)
+t.test(tempscore_wide$between, mu = 0.5)
+```
+
+```{r paired-samples t test}
+# Paired t-test comparing within- and between-event temp factor
+temp_event_t <- t.test(tempscore_wide$within, tempscore_wide$between, paired = TRUE)
+temp_event_t
+
+# Cohen's d
+repeated_measures_d(tempscore_wide$within, tempscore_wide$between, method = "z")
+```
+
+### Visualization
+```{r temporal cluster score graph}
+Fig3_b <- ggplot(tempscore_combined, aes(x = mean_temp,
+                    y = event_transition,
+                    colour =  event_transition,
+                    fill   =  event_transition)) +
+  ## half‑violin / density ribbon (behind points)
+  stat_halfeye(adjust       = .5,
+               width        = .5,
+               .width       = 0,         # turn off HDI bars
+               justification = -0.25,    # shift left so points sit next to ribbon
+               alpha        = .25,
+               point_colour = NA,
+               slab_colour  = NA) +
+  ## raw points (beeswarm jitter)
+  geom_jitter(height = .12, width = 0, size = 3, alpha = .8) +
+  ## mean ± 95 % CI
+  stat_summary(fun.data = mean_cl_normal,
+               geom     = "pointrange",
+               size     = 1.1,
+               colour   = "black") +
+  ## reference line
+  geom_vline(xintercept = 0.5, linetype = "dashed", size = 1) +
+
+  ## colours (modify to taste)
+  scale_colour_manual(values = c("within" = "#D85757",
+                                 "between"   = "#436B7D"), guide = "none") +
+  scale_fill_manual(values   = c("within" = "#D85757",
+                                 "between"   = "#436B7D"), guide = "none") +
+  annotate(
+    "segment",
+    x = 1.025, xend = 1.025,
+    y = 1, yend = 2
+  ) +
+  annotate(
+    "text",
+    x = 1.045,
+    y = 1.5,
+    label = "***",
+    size = 6
+  ) +
+  ## labels & theme
+  labs(x = "Temporal Factor",
+       y = "Event Type") +
+  theme_classic(base_size = 16) 
+  
+Fig3_b
+
+ggsave("Fig3_b.png", Fig3_b,
+       width = 6, height = 3.5, dpi = 600, units = "in")
+```
+
+## Forward Asymmetry
+
+### Forward asymmetry calculation
+
+```{r calculate forward asymmetry}
+forward_asymmetry_event <- zone_based_data %>%
+  filter(!is.na(actual_lags)) %>%
+  mutate(fwd_bwd = ifelse(actual_lags > 0, 1, -1))
+```
+
+```{r within-event forward asymmetry}
+
+# count all forward transitions & calculate proportion scores for within
+fwd_asymmetry_within_subject <- forward_asymmetry_event  %>%
+  dplyr::group_by(subject_id, block) %>%
+  summarise(
+    all_count = n(),
+    fwd_count_within = sum(event_transition == "within" & fwd_bwd == 1, na.rm = TRUE),
+    fwd_asymmetry = fwd_count_within / all_count,
+    .groups = "drop"
+  )
+
+# summary based on individual 
+fwd_asymmetry_within_summary <- fwd_asymmetry_within_subject %>%
+  group_by(subject_id) %>%
+  summarise(fwd_asymmetry_mean = mean(fwd_asymmetry),
+            .groups = "drop")
+
+# calculate forward asymmetry means and sds
+foward_asym_within_mean <- mean(fwd_asymmetry_within_summary$fwd_asymmetry_mean)
+foward_asym_within_sd <- sd(fwd_asymmetry_within_summary$fwd_asymmetry_mean)
+```
+
+```{r between-event forward asymmetry}
+# count all forward transitions & calculate proportion scores for between
+fwd_asymmetry_between_subject <- forward_asymmetry_event  %>%
+  dplyr::group_by(subject_id, block) %>%
+  summarise(
+    all_count = n(),
+    fwd_count_between = sum(event_transition == "between" & fwd_bwd == 1, na.rm = TRUE),
+    fwd_asymmetry = fwd_count_between / all_count,
+    .groups = "drop"
+  )
+
+# summary based on individual 
+fwd_asymmetry_between_summary <- fwd_asymmetry_between_subject %>%
+  group_by(subject_id) %>%
+  summarise(fwd_asymmetry_mean = mean(fwd_asymmetry),
+            .groups = "drop")
+
+# calculate forward asymmetry means and sds
+foward_asym_between_mean <- mean(fwd_asymmetry_between_summary$fwd_asymmetry_mean)
+foward_asym_between_sd <- sd(fwd_asymmetry_between_summary$fwd_asymmetry_mean)
+```
+
+```{r forward asymmetry output}
+# print output - within-events
+cat("within-event forward asymemtry mean: ", foward_asym_within_mean , "\n")
+cat("within-event forward asymemtry sd: ", foward_asym_within_sd, "\n")
+
+# print output - between-events
+cat("between-event forward asymemtry mean: ", foward_asym_between_mean , "\n")
+cat("between-event forward asymemtry sd: ", foward_asym_between_sd, "\n")
+```
+### Combine both within- and between-event datasets for analysis
+
+```{r combine between & within forward asymmetry datasets}
+# combine two datasheets
+fwd_asymmetry_between_subject_mutate <- fwd_asymmetry_between_subject %>%
+  mutate(event_transition = "between")
+fwd_asymmetry_withinsubject_mutate <- fwd_asymmetry_within_subject %>%
+  mutate(event_transition = "within")
+fwd_asymmetry_combined <- bind_rows(fwd_asymmetry_between_subject_mutate, fwd_asymmetry_withinsubject_mutate)
+
+# combined over subjects
+fwd_combined <- fwd_asymmetry_combined %>%
+  group_by(subject_id, event_transition) %>%
+  summarize(mean_fwd = mean(fwd_asymmetry),
+            .groups = "drop")
+```
+
+```{r participant exclusion based on having only one type of event}
+# Check which participants have both 'within' and 'between'
+participants_check_fwd <- fwd_combined %>%
+  group_by(subject_id) %>%
+  summarize(n_conditions = n_distinct(event_transition)) %>%
+  filter(n_conditions < 2)
+participants_check_fwd
+
+# exclude subjects with only one type of event transition
+fwd_combined <- fwd_combined %>%
+   filter(!subject_id %in% participants_check_fwd$subject_id)
+```
+
+### T-test analysis
+
+```{r one-sample t test: forward asymmetry}
+# Pivot the data to wide format
+fwd_wide <- fwd_combined %>%
+  pivot_wider(names_from = event_transition, values_from = mean_fwd)
+
+# Check if forward asymmetry is higher than the null
+# Because we split the numerators, the expected average is now 0.25
+# One sample t test with two tails for both event types
+t.test(fwd_wide$within, mu = 0.25)
+t.test(fwd_wide$between, mu = 0.25)
+```
+
+```{r paired-samples t test}
+# Paired t-test comparing within- and between-event forward asymmetry
+fwd_event_t <- t.test(fwd_wide$within, fwd_wide$between, paired = TRUE)
+fwd_event_t
+
+# Cohen's d
+repeated_measures_d(fwd_wide$within, fwd_wide$between, method = "z")
+```
+
+```{r forward asymmetry graph}
+Fig3_c <- ggplot(fwd_combined, aes(x = mean_fwd,
+                    y = event_transition,
+                    colour =  event_transition,
+                    fill   =  event_transition)) +
+  ## half‑violin / density ribbon (behind points)
+  stat_halfeye(adjust       = .5,
+               width        = .5,
+               .width       = 0,         # turn off HDI bars
+               justification = -0.25,    # shift left so points sit next to ribbon
+               alpha        = .25,
+               point_colour = NA,
+               slab_colour  = NA) +
+  ## raw points (beeswarm jitter)
+  geom_jitter(height = .12, width = 0, size = 3, alpha = .8) +
+  ## mean ± 95 % CI
+  stat_summary(fun.data = mean_cl_normal,
+               geom     = "pointrange",
+               size     = 1.1,
+               colour   = "black") +
+
+  ## reference line
+  geom_vline(xintercept = 0.25, linetype = "dashed", size = 1) +
+  ## colours (modify to taste)
+  scale_colour_manual(values = c("within" = "#D85757",
+                                 "between"   = "#436B7D"), guide = "none") +
+  scale_fill_manual(values   = c("within" = "#D85757",
+                                 "between"   = "#436B7D"), guide = "none") +
+  annotate(
+    "segment",
+    x = 1.00, xend = 1.00,
+    y = 1, yend = 2
+  ) +
+  annotate(
+    "text",
+    x = 1.045,
+    y = 1.5,
+    label = "***",
+    size = 6
+  ) +
+  ## labels & theme
+  labs(x = "Forward Asymmetry",
+       y = "Event Type") +
+  theme_classic(base_size = 16) 
+  
+Fig3_c
+
+ggsave("Fig3_c.png", Fig3_c,
+       width = 6, height = 3.5, dpi = 600, units = "in")
+```
+
+
