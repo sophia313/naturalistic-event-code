@@ -4,8 +4,7 @@ Overview
 
 This repository contains analysis code associated with the manuscript:
 
-[Manuscript Title]
-Zhang, X., et al. (2026). Free recall is sculpted by naturalistic event structure.
+Free recall is sculpted by naturalistic event structure.
 
 This project investigates how event boundaries shape the temporal organization of episodic memory during naturalistic experiences.
 
