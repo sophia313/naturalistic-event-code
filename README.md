@@ -46,7 +46,7 @@ To reproduce the analyses reported in the manuscript:
 
 If you use this code or dataset, please cite:
 
-Zhang, X., et al. (Year). [Manuscript Title]. [Journal Name]. [DOI]
+Zhang, X., Diamond, N.B., Armson, M.J., Gilboa, A., Levine, B. (2026). Free recall is sculpted by naturalistic event structure. [preprint]
 
 
 Contact
