@@ -1,0 +1,356 @@
+---
+title: "EventBoundary_analysis"
+author: "Xuan Zhang"
+date: "2026-01-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Read packages
+
+```{r read packages}
+library(tidyverse)
+library(mmand)
+library(grid)
+library(readxl)
+```
+
+## Read Event Boundary Dataset
+
+---
+
+```{r read data, echo=FALSE}
+setwd('~/Desktop/ProjectsTracks/FRP_EventSegment/Analysis') # set your current directory
+event_boundary_raw <- read_excel("event_boundary/EventBoundary_Summary.xlsx")
+```
+
+## Separate Data Based on Section (P vs. H)
+
+---
+```{r data preparation, echo=FALSE}
+h_event <- event_boundary_raw[,c("Item_Gaps", "H_Score_Percentage")] %>% filter(!is.na(H_Score_Percentage)) 
+p_event <- event_boundary_raw[,c("Item_Gaps", "P_Score_Percentage")] %>% filter(!is.na(P_Score_Percentage)) 
+```
+
+---
+
+## 1D Gaussian Smoothing
+
+---
+```{r - H section}
+# Extract event ratings
+h_event_raw <- h_event$H_Score_Percentage
+
+# Apply Gaussian Smoothing
+h_smooth_agreement <- gaussianSmooth(h_event_raw, sigma = 0.5)
+
+# Find local maxima (points higher than neighbors)
+# This function returns the index of every peak
+find_peaks <- function(x, min_height = -Inf, min_prom = 0) {
+  n <- length(x)
+  peaks <- integer(0)
+
+  for (i in 2:(n-1)) {
+    if (x[i] >= x[i-1] && x[i] >= x[i+1] && x[i] >= min_height) {
+      peaks <- c(peaks, i)
+    }
+  }
+
+  # optional: simple prominence filter
+  if (min_prom > 0 && length(peaks) > 0) {
+    keep <- sapply(peaks, function(i) {
+      left_min  <- min(x[1:i])
+      right_min <- min(x[i:n])
+      (x[i] - max(left_min, right_min)) >= min_prom
+    })
+    peaks <- peaks[keep]
+  }
+
+  unique(peaks)
+}
+
+peaks_h <- find_peaks(h_smooth_agreement)
+```
+
+
+```{r H section visualization}
+boundary_items_h <- c(2, 5, 8, 12, 17, 21)
+x_labels_h <- ifelse(
+  1:25 %in% boundary_items_h,
+  paste0("<b><span style='color:#28BCC4'>", 1:25, "</span></b>"),
+  1:25
+)
+
+# Visualization
+ggplot(h_event, aes(x = Item_Gaps)) +
+  # 1) Background Bars
+  geom_col(
+    aes(y = H_Score_Percentage, fill = "Raw agreement"),
+    width = 0.85, alpha = 0.4
+  ) +
+
+  # 2) Smoothed curve
+  # Added linetype mapping here to ensure it merges with the legend
+  geom_line(
+    aes(x = Item_Gaps, 
+        y = h_smooth_agreement, color = "Gaussian-smoothed", linetype = "Gaussian-smoothed"),
+    linewidth = 1.1, lineend = "round"
+  ) +
+
+  # 3) Boundary consensus (The actual lines)
+  geom_vline(
+    xintercept = peaks_h, 
+    color = "#00BFC4", 
+    linetype = "dashed",
+    linewidth = 0.8, 
+    alpha = 0.9
+  ) +
+  
+  # 4) Legend Trick (The dummy segment)
+  # Changed NA to 1 so ggplot doesn't complain about empty aesthetics
+  geom_segment(
+    aes(x = 1, xend = 1, y = 1, yend = 1, 
+        color = "Boundary consensus", linetype = "Boundary consensus"),
+    alpha = 0 # Keeps it invisible
+  ) +
+
+  labs(
+    x = "Serial Item Transitions",
+    y = "Proportion of Agreement",
+    fill = NULL, color = NULL, linetype = NULL
+  ) +
+
+  # Manual scales
+  scale_fill_manual(values = c("Raw agreement at each transition" = "#9E9E9E")) +
+  scale_color_manual(values = c(
+    "Gaussian-smoothed"  = "#F8766D",
+    "Boundary consensus" = "#00BFC4"
+  )) +
+  scale_linetype_manual(values = c(
+    "Boundary consensus" = "dashed",
+    "Gaussian-smoothed"  = "solid"
+  )) +
+  
+  guides(
+    color = guide_legend(
+      override.aes = list(
+        linetype = c("dashed", "solid"), # Matches Consensus, Gaussian order
+        color = c("#00BFC4", "#F8766D"), # Force the colors
+        alpha = 1,                       # Make legend keys opaque
+        linewidth = 1
+      )
+    ),
+    linetype = guide_legend(
+      override.aes = list(
+        linetype = c("dashed", "solid"),
+        color = c("#00BFC4", "#F8766D"),
+        alpha = 1,
+        linewidth = 1
+      )
+    )
+  ) +
+  
+  scale_x_continuous(breaks = 1:25, labels = x_labels_h) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.05)) + 
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.box.spacing = unit(0.5, "cm"), # Space between plot and legend
+    axis.line = element_line(linewidth = 0.3),
+    axis.ticks = element_line(linewidth = 0.3)
+  ) + 
+  theme(
+    axis.text.x = ggtext::element_markdown()
+  )
+
+# GGsave
+ggsave(
+  filename = "Event_Boundary_Agreement_H.pdf",
+  width = 8,
+  height = 5,
+  device = cairo_pdf   # Better font rendering than standard pdf
+)
+```
+
+
+```{r - P section}
+p_event_raw <- p_event$P_Score_Percentage
+p_smooth_agreement <- gaussianSmooth(p_event_raw, sigma = 0.5)
+
+# 2. Find local maxima (points higher than neighbors)
+# This function returns the index of every peak
+peaks_p <- find_peaks(p_smooth_agreement)
+```
+
+**The reason to use 1D Gaussian smoothing is because this boundary data is index (or item) based. KDE works on continuous data.
+
+```{r P Visualization}
+boundary_items_p <- c(4, 8, 10, 15)
+x_labels_p <- ifelse(
+  1:18 %in% boundary_items_p,
+  paste0("<b><span style='color:#28BCC4'>", 1:18, "</span></b>"),
+  1:18
+)
+
+# Visualization
+ggplot(p_event, aes(x = Item_Gaps)) +
+  # 1) Background Bars
+  geom_col(
+    aes(y = P_Score_Percentage, fill = "Raw agreement"),
+    width = 0.85, alpha = 0.4
+  ) +
+
+  # 2) Smoothed curve
+  # Added linetype mapping here to ensure it merges with the legend
+  geom_line(
+    aes(x = Item_Gaps, y = p_smooth_agreement, color = "Gaussian-smoothed", linetype = "Gaussian-smoothed"),
+    linewidth = 1.1, lineend = "round"
+  ) +
+
+  # 3) Boundary consensus (The actual lines)
+  geom_vline(
+    xintercept = peaks_p, 
+    color = "#00BFC4", 
+    linetype = "dashed",
+    linewidth = 0.8, 
+    alpha = 0.9
+  ) +
+  
+  # 4) Legend Trick (The dummy segment)
+  # Changed NA to 1 so ggplot doesn't complain about empty aesthetics
+  geom_segment(
+    aes(x = 1, xend = 1, y = 1, yend = 1, 
+        color = "Boundary consensus", linetype = "Boundary consensus"),
+    alpha = 0 # Keeps it invisible
+  ) +
+
+  labs(
+    # title = "Agreement on Event Boundaries",
+    x = "Serial Item Transitions",
+    y = "Proportion of Agreement",
+    fill = NULL, color = NULL, linetype = NULL
+  ) +
+
+  # Manual scales
+  scale_fill_manual(values = c("Raw agreement at item transitions" = "#9E9E9E")) +
+  scale_color_manual(values = c(
+    "Gaussian-smoothed"  = "#F8766D",
+    "Boundary consensus" = "#00BFC4"
+  )) +
+  scale_linetype_manual(values = c(
+    "Boundary consensus" = "dashed",
+    "Gaussian-smoothed"  = "solid"
+  )) +
+  
+  guides(
+    color = guide_legend(
+      override.aes = list(
+        linetype = c("dashed", "solid"), # Matches Consensus, Gaussian order
+        color = c("#00BFC4", "#F8766D"), # Force the colors
+        alpha = 1,                       # Make legend keys opaque
+        linewidth = 1
+      )
+    ),
+    linetype = guide_legend(
+      override.aes = list(
+        linetype = c("dashed", "solid"),
+        color = c("#00BFC4", "#F8766D"),
+        alpha = 1,
+        linewidth = 1
+      )
+    )
+  ) +
+  
+  scale_x_continuous(breaks = 1:18, labels = x_labels_p) +
+  scale_y_continuous(expand = c(0, 0), limits = c(0, 1.05)) + 
+
+  theme_classic(base_size = 13) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal",
+    legend.box.spacing = unit(0.5, "cm"), # Space between plot and legend
+    axis.line = element_line(linewidth = 0.3),
+    axis.ticks = element_line(linewidth = 0.3)
+  ) +
+  theme(
+    axis.text.x = ggtext::element_markdown()
+  )
+
+# GGsave
+ggsave(
+  filename = "Event_Boundary_Agreement_P.pdf",
+  width = 8,
+  height = 5,
+  device = cairo_pdf   # Better font rendering than standard pdf
+)
+```
+
+
+## Exploratory: Kernel Density Estimation for Event Segmentation
+
+---
+```{r KDE - H section, echo=FALSE}
+
+# Draw Plot FIRST to capture coordinates
+# -------------------------------------------------------
+# We save the output of barplot() into a variable 'bp'. 
+# 'bp' contains the exact X-coordinate of the center of every bar.
+bp_h <- barplot(h_event$H_Score_Percentage, names.arg = h_event$Item_Gaps, las = 2, col = "lightblue", 
+              main = "Boundary Agreement (Aligned) - H Section", ylim = c(0, 1))
+
+# Calculate Density using 'bp' (Real Coordinates)
+# ---------------------------------------------------------
+h_event$norm_weights <- h_event$H_Score_Percentage/sum(h_event$H_Score_Percentage)
+
+
+# Use 'bp' (the bar coordinates) instead of 1:length(scores)
+kde_h <- density(bp_h, weights = h_event$norm_weights, bw = 0.7)
+
+# Fix the Scaling Factor (Height)
+# -------------------------------------------------------
+# Because the bars are spread out (spacing > 1), the density curve gets flatter.
+# We must multiply by the average spacing to regain the correct height.
+spacing <- mean(diff(bp_h)) # Usually 1.2
+scale_factor_h <- sum(h_event$H_Score_Percentage) * spacing
+
+# 5. Draw the Line
+# -------------------------------------------------------
+lines(kde_h$x, kde_h$y * scale_factor_h, col = "red", lwd = 1.5)
+
+```
+```{r KDE - P section, echo=FALSE}
+
+# Draw Plot FIRST to capture coordinates
+# -------------------------------------------------------
+# We save the output of barplot() into a variable 'bp'. 
+# 'bp' contains the exact X-coordinate of the center of every bar.
+bp_p <- barplot(p_event$P_Score_Percentage, names.arg = p_event$Item_Gaps, las = 2, col = "lightblue", 
+              main = "Boundary Agreement (Aligned) - P Section", ylim = c(0, 1))
+
+# Calculate Density using 'bp' (Real Coordinates)
+# ---------------------------------------------------------
+p_event$norm_weights <- p_event$P_Score_Percentage/sum(p_event$P_Score_Percentage)
+
+
+# Use 'bp' (the bar coordinates) instead of 1:length(scores)
+kde_p <- density(bp_p, weights = p_event$norm_weights, bw = 0.7)
+
+# Fix the Scaling Factor (Height)
+# -------------------------------------------------------
+# Because the bars are spread out (spacing > 1), the density curve gets flatter.
+# We must multiply by the average spacing to regain the correct height.
+spacing <- mean(diff(bp_p)) 
+scale_factor_p <- sum(p_event$P_Score_Percentage) * spacing
+
+# 5. Draw the Line
+# -------------------------------------------------------
+lines(kde_p$x, kde_p$y * scale_factor_p, col = "red", lwd = 1.5)
+```
