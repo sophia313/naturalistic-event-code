@@ -16,6 +16,7 @@ Using a naturalistic, in-person art tour, we examined how participants segment c
 
 The repository is organized into scripts for event segmentation, temporal clustering, and statistical analyses.
 
+```text
 event-segmentation-memory/
 ├── README.md
 ├── LICENSE
@@ -24,6 +25,9 @@ event-segmentation-memory/
     ├── EventTemp_recall_analysis.Rmd
     ├── recall_helper_functions.R
     └── Supplementary_analysis.Rmd
+    └── seg_strategy_analysis.Rmd
+    └── EventBoundary_Analysis.Rmd
+```
 
 Note: The repository structure will be updated to reflect the final organization of the analysis scripts.
 
