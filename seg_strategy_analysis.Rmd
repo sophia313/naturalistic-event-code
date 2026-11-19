@@ -1,0 +1,109 @@
+---
+title: "seg_strategy_analysis"
+author: "Xuan Zhang"
+date: "2026-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Preparation
+
+---
+## Read packages
+
+```{r read packages}
+library(tidyverse)
+library(ggwordcloud)
+```
+
+---
+## Read post-experiment questionnaire data
+```{r}
+setwd('~/Desktop/ProjectsTracks/FRP_EventSegment/Analysis') # set your current working directory
+seg_strategy_raw <- read_csv("segmentation_strategy/segmentation_strategy.csv")
+```
+---
+
+## Tidy data
+```{r}
+# separate reported strategies into different columns
+seg_strategy_cat <- seg_strategy_raw %>%
+  separate(strategy_cat, 
+           into = c("strategy_1", "strategy_2", "strategy_3", "strategy_4"),
+           sep = ",\\s*",
+           fill = "right",
+           extra = "merge") %>%
+  pivot_longer(cols = starts_with("strategy_"),
+               names_to = "strategy_num",
+               values_to = "strategy_category",
+               values_drop_na = TRUE) %>%
+  select(!strategy_num)
+
+```
+
+---
+
+## Summarise data
+```{r}
+# number of strategies mentioned per participant
+strategy_summary <- seg_strategy_cat %>%
+  group_by(subject_id) %>%
+  summarise(n_strategies = n_distinct(strategy_category),
+    strategies_used = paste(
+      sort(unique(strategy_category)),
+      collapse = ", "
+    ),
+    .groups = "drop")
+strategy_summary
+
+# average strategies mentioned by each participant
+mean(strategy_summary$n_strategies)
+```
+
+## Visualization
+```{r}
+# create word frequency summary
+strategy_frequency <- seg_strategy_cat %>%
+  filter(!is.na(strategy_category),
+         strategy_category != "unspecified") %>%
+  distinct(subject_id, strategy_category) %>%  # count each participant once
+  count(strategy_category, name = "frequency") %>%
+  mutate(
+    freq_percent = frequency / sum(frequency),
+    strategy_label = gsub("_", " ", strategy_category)
+  ) %>%
+  arrange(desc(frequency)) %>%
+  mutate(
+    strategy_label = gsub("_", " ", strategy_category)
+  )
+
+strategy_frequency
+
+# create ggplot
+Fig2_c <- ggplot(
+  strategy_frequency,
+  aes(
+    label = strategy_label,
+    size = frequency, 
+    colour = frequency, 
+  )
+) +
+  geom_text_wordcloud() +
+  scale_size_area(max_size = 12) +
+  scale_colour_viridis_c(option = "H") +
+  labs(
+    subtitle = "Word size represents the number of participants mentioning each strategy"
+  ) +
+  theme_minimal()
+
+Fig2_c
+
+# Save as a 6‑inch‑by‑6‑inch square, high‑resolution
+ggsave("Fig2_c.png", Fig2_c, width = 8, height = 6, units = "in", dpi = 600)
+```
+
+
+
