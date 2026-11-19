@@ -4,7 +4,7 @@
 
 This repository contains analysis code associated with the manuscript:
 
-Free recall is sculpted by naturalistic event structure.
+*Free recall is sculpted by naturalistic event structure.*
 
 This project investigates how event boundaries shape the temporal organization of episodic memory during naturalistic experiences.
 
@@ -12,29 +12,23 @@ Previous research has demonstrated that event boundaries influence memory organi
 
 Using a naturalistic, in-person art tour, we examined how participants segment continuous experiences into discrete events and whether these independently identified event boundaries are associated with patterns of temporal organization during subsequent free recall.
 
-Repository Structure
+## Repository Structure
 
 The repository is organized into scripts for event segmentation, temporal clustering, and statistical analyses.
 
 event-segmentation-memory/
 ├── README.md
-├── scripts/
-│   ├── EventTemp_encoding_analysis.Rmd
-│   ├── EventTemp_recall_analysis.Rmd
-│   ├── recall_helper_functions.R
-│   ├── Supplementary_analysis.R
+├── LICENSE
+└── scripts/
+    ├── EventTemp_encoding_analysis.Rmd
+    ├── EventTemp_recall_analysis.Rmd
+    ├── recall_helper_functions.R
+    └── Supplementary_analysis.Rmd
 
 Note: The repository structure will be updated to reflect the final organization of the analysis scripts.
 
-Data Availability
 
-The data associated with this study are stored through Zenodo:
-
-Dataset DOI: [Insert DOI]
-
-The dataset includes de-identified event segmentation and free recall data required to reproduce the reported analyses, subject to applicable ethical and data-sharing restrictions.
-
-Reproducibility
+## Reproducibility
 
 To reproduce the analyses reported in the manuscript:
 
@@ -44,7 +38,7 @@ To reproduce the analyses reported in the manuscript:
 
 
 
-Citation
+## Citation
 
 If you use this code or dataset, please cite:
 
@@ -60,6 +54,6 @@ Rotman Research Institute, Baycrest
 University of Toronto
 [xzhang@research.baycrest.org]
 
-License
+## License
 
-[MIT license]
+This project is licensed under the MIT License.
